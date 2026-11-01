@@ -1,0 +1,1676 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>크레이즈 RPG 개발판 (Craze RPG Dev Build)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Noto+Sans+KR:wght@400;700;900&display=swap');
+
+        :root {
+            --rpg-border: #e2e8f0;
+            --rpg-bg: rgba(15, 23, 42, 0.92);
+            --rpg-accent: #fbbf24;
+        }
+
+        body {
+            font-family: 'Noto Sans KR', sans-serif;
+            background-color: #090d16;
+            color: #f8fafc;
+            overflow: hidden;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        /* 쯔꾸르 스타일 창 테두리 */
+        .rpg-window {
+            background: var(--rpg-bg);
+            border: 3px solid #cbd5e1;
+            box-shadow: inset 0 0 0 2px #0f172a, 0 8px 20px rgba(0, 0, 0, 0.7);
+            border-radius: 6px;
+        }
+
+        .rpg-btn {
+            background: linear-gradient(180deg, #334155 0%, #1e293b 100%);
+            border: 2px solid #94a3b8;
+            border-radius: 4px;
+            transition: all 0.1s ease;
+            box-shadow: 0 3px 0 #0f172a;
+        }
+        .rpg-btn:hover:not(:disabled) {
+            border-color: #fbbf24;
+            color: #fbbf24;
+            transform: translateY(-1px);
+        }
+        .rpg-btn:active:not(:disabled) {
+            transform: translateY(2px);
+            box-shadow: 0 1px 0 #0f172a;
+        }
+        .rpg-btn:disabled {
+            opacity: 0.45;
+            cursor: not-allowed;
+        }
+
+        canvas {
+            image-rendering: pixelated;
+            background-color: #111827;
+        }
+
+        /* 데미지 플로팅 애니메이션 */
+        @keyframes floatUp {
+            0% { opacity: 1; transform: translateY(0) scale(0.9); }
+            30% { transform: translateY(-12px) scale(1.1); }
+            100% { opacity: 0; transform: translateY(-30px) scale(0.95); }
+        }
+        .dmg-popup {
+            animation: floatUp 0.85s ease-out forwards;
+            pointer-events: none;
+        }
+
+        /* 피격 흔들림 효과 */
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            20%, 60% { transform: translateX(-6px); }
+            40%, 80% { transform: translateX(6px); }
+        }
+        .shake-anim {
+            animation: shake 0.35s ease-in-out;
+        }
+
+        /* 커스텀 스크롤바 */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #0f172a; }
+        ::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
+    </style>
+</head>
+<body class="w-screen h-screen flex flex-col items-center justify-center p-1 sm:p-3">
+
+    <!-- 전체 게임 래퍼 -->
+    <div id="game-wrapper" class="relative w-full max-w-5xl h-full max-h-[860px] flex flex-col lg:flex-row gap-2 sm:gap-3">
+        
+        <!-- 좌측/메인: 게임 화면 및 오버레이 영역 -->
+        <div class="relative flex-1 flex flex-col rpg-window overflow-hidden">
+            
+            <!-- 상단 헤더: 타이틀 및 현재 맵 정보 -->
+            <div class="flex items-center justify-between px-3 py-2 bg-slate-900/90 border-b-2 border-slate-700 text-xs sm:text-sm">
+                <div class="flex items-center gap-2">
+                    <span class="px-2 py-0.5 bg-amber-500/20 border border-amber-400 text-amber-300 font-bold rounded text-xs">DEV v1.0</span>
+                    <h1 class="font-black tracking-tight text-white">크레이즈 RPG 개발판</h1>
+                </div>
+                <div id="map-indicator" class="font-bold text-emerald-400">📍 시작의 마을 아르카디아</div>
+                <div class="flex items-center gap-1.5">
+                    <button onclick="Game.saveGame()" class="rpg-btn px-2 py-1 text-xs">💾 저장</button>
+                    <button onclick="Game.toggleSound()" id="sound-btn" class="rpg-btn px-2 py-1 text-xs">🔊 켜짐</button>
+                    <button onclick="UI.togglePad()" id="pad-toggle-btn" class="rpg-btn px-2 py-1 text-xs text-sky-300">🎮 패드</button>
+                    <button onclick="UI.openDevModal()" class="rpg-btn px-2 py-1 text-xs text-purple-300 border-purple-400">🛠️ 치트</button>
+                </div>
+            </div>
+
+            <!-- 메인 캔버스 컨테이너 -->
+            <div id="canvas-container" class="relative flex-1 min-h-[260px] flex items-center justify-center bg-slate-950 overflow-hidden p-1">
+                <canvas id="map-canvas" width="480" height="480" class="w-full h-full object-contain max-w-[480px] max-h-[480px]"></canvas>
+
+                <!-- 1. 전투 오버레이 모달 -->
+                <div id="battle-screen" class="hidden absolute inset-0 bg-slate-950/95 z-20 flex flex-col justify-between p-2 sm:p-4 overflow-y-auto">
+                    <!-- 전투 상단: 스테이지 & 몬스터 정보 -->
+                    <div class="flex justify-between items-center border-b border-slate-700 pb-1.5 shrink-0">
+                        <div class="flex items-center gap-2">
+                            <span id="battle-stage-tag" class="text-[11px] px-2 py-0.5 rounded bg-red-900/60 text-red-300 border border-red-600 font-bold">STAGE 1</span>
+                            <h2 id="battle-enemy-name" class="text-base sm:text-lg font-black text-white">초원 슬라임</h2>
+                        </div>
+                        <div class="text-right text-[11px] text-slate-400">
+                            <span>Lv.<b id="battle-enemy-lv" class="text-amber-300">1</b></span> | <span id="battle-enemy-stats">ATK 8 / DEF 2</span>
+                        </div>
+                    </div>
+
+                    <!-- 전투 중앙: 몬스터 비주얼 & 체력바 & 로그 -->
+                    <div class="relative flex-1 flex flex-col items-center justify-center my-1 min-h-[150px]">
+                        <div id="damage-layer" class="absolute inset-0 flex items-center justify-center z-30 pointer-events-none"></div>
+                        
+                        <div class="flex items-center gap-4 w-full max-w-md justify-center">
+                            <div id="enemy-sprite-box" class="w-20 h-20 sm:w-28 sm:h-28 rounded-2xl bg-slate-900/90 border-2 border-slate-700 flex items-center justify-center text-5xl sm:text-6xl shadow-inner transition-transform shrink-0">
+                                💧
+                            </div>
+
+                            <!-- 적 체력바 -->
+                            <div class="flex-1 max-w-[220px]">
+                                <div class="flex justify-between text-xs font-bold mb-1">
+                                    <span class="text-red-400">ENEMY HP</span>
+                                    <span id="battle-enemy-hp-text">50 / 50</span>
+                                </div>
+                                <div class="w-full h-3.5 bg-slate-800 rounded-full overflow-hidden border border-slate-600">
+                                    <div id="battle-enemy-hp-bar" class="h-full bg-gradient-to-r from-red-600 to-rose-400 transition-all duration-200" style="width: 100%;"></div>
+                                </div>
+                                <div class="mt-2 text-[11px] text-slate-400">
+                                    💡 단축키: <b class="text-amber-300">1/Space</b> 공격, <b class="text-sky-300">2</b> 스킬, <b class="text-emerald-300">3</b> 아이템, <b class="text-purple-300">A</b> 오토
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 전투 로그 -->
+                        <div id="battle-log" class="w-full max-w-md h-16 sm:h-20 mt-2 p-2 bg-black/70 border border-slate-700 rounded text-xs overflow-y-auto space-y-0.5 font-mono">
+                        </div>
+                    </div>
+
+                    <!-- 전투 하단: 플레이어 상태 요약 & 커맨드 (항상 하단 고정) -->
+                    <div class="space-y-1.5 shrink-0 pt-1 border-t border-slate-800">
+                        <!-- 플레이어 미니 게이지 -->
+                        <div class="grid grid-cols-2 gap-2 bg-slate-900/90 p-1.5 rounded border border-slate-700 text-xs">
+                            <div>
+                                <div class="flex justify-between font-bold text-emerald-400">
+                                    <span>🧙‍♂️ 용사 HP</span>
+                                    <span id="battle-player-hp">100/100</span>
+                                </div>
+                                <div class="w-full h-2 bg-slate-800 rounded overflow-hidden mt-0.5">
+                                    <div id="battle-player-hp-bar" class="h-full bg-emerald-500 transition-all" style="width:100%"></div>
+                                </div>
+                            </div>
+                            <div>
+                                <div class="flex justify-between font-bold text-sky-400">
+                                    <span>💧 용사 MP</span>
+                                    <span id="battle-player-mp">40/40</span>
+                                </div>
+                                <div class="w-full h-2 bg-slate-800 rounded overflow-hidden mt-0.5">
+                                    <div id="battle-player-mp-bar" class="h-full bg-sky-500 transition-all" style="width:100%"></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 스킬/아이템 선택 서브 패널 -->
+                        <div id="battle-cmd-sub" class="hidden bg-slate-900 border-2 border-amber-400 rounded p-2">
+                            <div class="flex justify-between items-center mb-1">
+                                <span id="battle-sub-title" class="text-xs font-bold text-amber-400">스킬 선택</span>
+                                <button onclick="Battle.toggleSubMenu(null)" class="text-xs text-slate-300 hover:text-white px-2 py-0.5 bg-slate-800 rounded">✖ 닫기</button>
+                            </div>
+                            <div id="battle-sub-list" class="grid grid-cols-2 gap-1.5 max-h-24 overflow-y-auto"></div>
+                        </div>
+
+                        <!-- 메인 전투 버튼 -->
+                        <div id="battle-cmd-main" class="grid grid-cols-5 gap-1.5">
+                            <button onclick="Battle.playerAction('attack')" class="rpg-btn py-2.5 font-black text-xs sm:text-sm text-amber-300 border-amber-400/80">⚔️ 공격 (1)</button>
+                            <button onclick="Battle.toggleSubMenu('skill')" class="rpg-btn py-2.5 font-bold text-xs sm:text-sm text-sky-300">✨ 스킬 (2)</button>
+                            <button onclick="Battle.toggleSubMenu('item')" class="rpg-btn py-2.5 font-bold text-xs sm:text-sm text-emerald-300">🧪 포션 (3)</button>
+                            <button onclick="Battle.toggleAuto()" id="battle-auto-btn" class="rpg-btn py-2.5 font-bold text-xs sm:text-sm text-purple-300">⚡ 오토 (A)</button>
+                            <button onclick="Battle.playerAction('run')" class="rpg-btn py-2.5 font-bold text-xs sm:text-sm text-slate-300">🏃 도주 (4)</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 2. 상점 / 여관 / 스테이지 이동 모달 -->
+                <div id="modal-screen" class="hidden absolute inset-0 bg-slate-950/95 z-20 flex flex-col p-4">
+                    <div class="flex justify-between items-center border-b-2 border-slate-700 pb-2 mb-3">
+                        <h2 id="modal-title" class="text-lg font-black text-amber-400">🛒 왕국 종합 상점</h2>
+                        <button onclick="UI.closeModal()" class="rpg-btn px-3 py-1 text-xs font-bold">닫기 (ESC)</button>
+                    </div>
+                    <div id="modal-content" class="flex-1 overflow-y-auto space-y-2 pr-1"></div>
+                </div>
+
+            </div>
+
+            <!-- 하단: 대화창 / 시스템 메시지 로그 & 모바일 방향키 -->
+            <div class="p-2 bg-slate-900 border-t-2 border-slate-700 flex flex-row gap-2 items-center justify-between shrink-0">
+                <div class="flex-1 min-w-0">
+                    <div class="flex items-center justify-between mb-0.5">
+                        <span id="dialog-speaker" class="text-xs font-extrabold text-amber-400 truncate">📢 시스템 안내</span>
+                        <span class="hidden sm:inline text-[10px] text-slate-400">이동: 방향키/WASD | 조사: Space</span>
+                    </div>
+                    <div id="dialog-text" class="text-xs text-slate-100 h-11 overflow-y-auto leading-snug bg-slate-950/80 p-1.5 rounded border border-slate-800">
+                        크레이즈 RPG 개발판에 오신 것을 환영합니다! 마을 사람들과 대화하고 동쪽 포털(🌀)을 통해 던전으로 출정하세요.
+                    </div>
+                </div>
+
+                    <!-- 모바일/마우스 겸용 가상 패드 (콤팩트형) -->
+                <div id="virtual-pad" class="flex items-center gap-1.5 shrink-0">
+                    <div class="grid grid-cols-3 gap-1 w-24 h-16">
+                        <div></div>
+                        <button onpointerdown="Game.movePlayer(0,-1)" class="rpg-btn flex items-center justify-center text-xs font-bold">▲</button>
+                        <div></div>
+                        <button onpointerdown="Game.movePlayer(-1,0)" class="rpg-btn flex items-center justify-center text-xs font-bold">◀</button>
+                        <button onpointerdown="Game.movePlayer(0,1)" class="rpg-btn flex items-center justify-center text-xs font-bold">▼</button>
+                        <button onpointerdown="Game.movePlayer(1,0)" class="rpg-btn flex items-center justify-center text-xs font-bold">▶</button>
+                    </div>
+                    <button onpointerdown="Game.handleActionButton()" class="rpg-btn h-16 px-2.5 font-black text-[11px] text-amber-300 flex flex-col items-center justify-center">
+                        <span class="text-sm">⚔️/🔍</span>
+                        <span>행동</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 우측/하단: 용사 상태창, 장비, 인벤토리, 퀘스트 진행도 -->
+        <div class="w-full lg:w-80 flex flex-col gap-1.5 rpg-window p-2.5 overflow-y-auto max-h-[30vh] lg:max-h-full shrink-0">
+            
+            <!-- 캐릭터 기본 정보 -->
+            <div class="border-b border-slate-700 pb-2">
+                <div class="flex justify-between items-center">
+                    <div class="flex items-center gap-2">
+                        <span class="text-2xl">🧙‍♂️</span>
+                        <div>
+                            <div class="font-black text-sm text-white">용사 크레이즈 <span id="stat-lv" class="text-amber-400">Lv.1</span></div>
+                            <div id="stat-title" class="text-[11px] text-slate-400">초보 모험가</div>
+                        </div>
+                    </div>
+                    <div class="text-right">
+                        <div class="text-xs font-bold text-yellow-400">💰 <span id="stat-gold">150</span> G</div>
+                        <div class="text-[11px] text-slate-400">처치: <span id="stat-kills">0</span>마리</div>
+                    </div>
+                </div>
+
+                <!-- HP / MP / EXP 게이지 -->
+                <div class="mt-2.5 space-y-1.5 text-xs">
+                    <div>
+                        <div class="flex justify-between mb-0.5">
+                            <span class="text-emerald-400 font-bold">HP</span>
+                            <span id="stat-hp-text">100 / 100</span>
+                        </div>
+                        <div class="w-full h-2 bg-slate-800 rounded overflow-hidden">
+                            <div id="stat-hp-bar" class="h-full bg-emerald-500 transition-all" style="width: 100%"></div>
+                        </div>
+                    </div>
+                    <div>
+                        <div class="flex justify-between mb-0.5">
+                            <span class="text-sky-400 font-bold">MP</span>
+                            <span id="stat-mp-text">40 / 40</span>
+                        </div>
+                        <div class="w-full h-2 bg-slate-800 rounded overflow-hidden">
+                            <div id="stat-mp-bar" class="h-full bg-sky-500 transition-all" style="width: 100%"></div>
+                        </div>
+                    </div>
+                    <div>
+                        <div class="flex justify-between mb-0.5">
+                            <span class="text-amber-400 font-bold">EXP</span>
+                            <span id="stat-exp-text">0 / 40</span>
+                        </div>
+                        <div class="w-full h-1.5 bg-slate-800 rounded overflow-hidden">
+                            <div id="stat-exp-bar" class="h-full bg-amber-400 transition-all" style="width: 0%"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 세부 전투 스탯 & 장착 장비 -->
+            <div class="grid grid-cols-2 gap-1.5 text-xs bg-slate-900/80 p-2 rounded border border-slate-800">
+                <div>⚔️ 공격력: <span id="stat-atk" class="font-bold text-white">12</span></div>
+                <div>🛡️ 방어력: <span id="stat-def" class="font-bold text-white">4</span></div>
+                <div class="col-span-2 pt-1 border-t border-slate-800 text-[11px] text-slate-300 space-y-0.5">
+                    <div>🗡️ 무기: <span id="equip-weapon" class="text-amber-300 font-semibold">수련용 목검</span></div>
+                    <div>🥋 방어구: <span id="equip-armor" class="text-sky-300 font-semibold">여행자의 천옷</span></div>
+                    <div>💍 장신구: <span id="equip-acc" class="text-purple-300 font-semibold">없음</span></div>
+                </div>
+            </div>
+
+            <!-- 메인 시나리오 목표 (5단계 던전 진행도) -->
+            <div class="bg-slate-900/90 border border-slate-700 rounded p-2 text-xs">
+                <div class="font-bold text-amber-400 mb-1 flex justify-between">
+                    <span>📜 메인 퀘스트 목표</span>
+                    <span id="quest-progress-pct">0/5 보스</span>
+                </div>
+                <div id="quest-desc" class="text-slate-200 text-[11px] leading-snug">
+                    1단계 [고블린 숲]의 보스 '고블린 족장'을 물리치세요. (권장 Lv.3)
+                </div>
+            </div>
+
+            <!-- 탭 메뉴: 가방 / 스킬 / 도감 -->
+            <div class="flex-1 flex flex-col min-h-[150px]">
+                <div class="grid grid-cols-3 gap-1 mb-2">
+                    <button onclick="UI.switchSideTab('inv')" id="tab-btn-inv" class="rpg-btn py-1 text-xs font-bold text-amber-300 border-amber-400">🎒 가방</button>
+                    <button onclick="UI.switchSideTab('skill')" id="tab-btn-skill" class="rpg-btn py-1 text-xs font-bold">✨ 스킬</button>
+                    <button onclick="UI.switchSideTab('stage')" id="tab-btn-stage" class="rpg-btn py-1 text-xs font-bold">🗺️ 원정대</button>
+                </div>
+
+                <!-- 탭 컨텐츠 영역 -->
+                <div id="side-tab-content" class="flex-1 bg-slate-950/70 border border-slate-800 rounded p-2 overflow-y-auto space-y-1.5 text-xs">
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        /**
+         * ============================================================================
+         * [PART 1] 게임 데이터베이스 (CONFIG)
+         * 추후 아이템, 스킬, 몬스터, 스테이지를 수정/추가할 때 이 객체만 편집하면 됩니다.
+         * ============================================================================
+         */
+        const GAME_DATA = {
+            // 1. 타일 정의 (맵 에디팅용)
+            TILES: {
+                0: { name: '잔디', color: '#14532d', walkable: true },
+                1: { name: '길', color: '#78350f', walkable: true },
+                2: { name: '나무/벽', color: '#064e3b', walkable: false, icon: '🌲' },
+                3: { name: '물/용암', color: '#1e3a8a', walkable: false, icon: '🌊' },
+                4: { name: '던전바닥', color: '#1f2937', walkable: true },
+                5: { name: '던전벽', color: '#0f172a', walkable: false, icon: '🧱' },
+                6: { name: '꽃밭(랜덤전투)', color: '#166534', walkable: true, encounter: true, icon: '🌿' },
+                7: { name: '위험지대(랜덤전투)', color: '#374151', walkable: true, encounter: true, icon: '💀' }
+            },
+
+            // 2. 플레이어 스킬 데이터
+            SKILLS: [
+                { id: 'slash', name: '파워 슬래시', reqLv: 1, mp: 6, type: 'dmg', mult: 1.6, desc: '강력한 내려치기로 160% 물리 피해를 입힙니다.' },
+                { id: 'heal', name: '라이트 힐', reqLv: 2, mp: 10, type: 'heal', power: 45, desc: '성스러운 빛으로 체력을 크게 회복합니다.' },
+                { id: 'fireball', name: '플레임 버스트', reqLv: 4, mp: 15, type: 'dmg', mult: 2.2, ignoreDef: true, desc: '적의 방어력을 일부 무시하는 220% 화염 마법입니다.' },
+                { id: 'drain', name: '소울 드레인', reqLv: 7, mp: 20, type: 'drain', mult: 1.8, desc: '180% 피해를 주고 피해량의 절반만큼 HP를 흡수합니다.' },
+                { id: 'meteor', name: '크레이즈 메테오', reqLv: 11, mp: 35, type: 'dmg', mult: 3.3, ignoreDef: true, desc: '궁극의 운석 낙하로 330% 절대 피해를 입힙니다.' }
+            ],
+
+            // 3. 아이템 및 장비 데이터
+            ITEMS: {
+                // 소비 아이템
+                'potion_s': { id: 'potion_s', name: '초급 빨간물약', type: 'consumable', price: 25, healHp: 50, icon: '🧪', desc: 'HP를 50 회복합니다.' },
+                'potion_m': { id: 'potion_m', name: '중급 농축물약', type: 'consumable', price: 80, healHp: 160, icon: '🍷', desc: 'HP를 160 회복합니다.' },
+                'potion_l': { id: 'potion_l', name: '엘릭서 포션', type: 'consumable', price: 220, healHp: 500, icon: '🏺', desc: 'HP를 500 회복합니다.' },
+                'ether_s':  { id: 'ether_s',  name: '마나 에테르', type: 'consumable', price: 45, healMp: 40, icon: '💧', desc: 'MP를 40 회복합니다.' },
+                'ether_l':  { id: 'ether_l',  name: '현자의 비약', type: 'consumable', price: 150, healMp: 150, icon: '🔮', desc: 'MP를 150 회복합니다.' },
+
+                // 무기 (Weapon)
+                'wp_wood':  { id: 'wp_wood',  name: '수련용 목검', type: 'weapon', price: 0, atk: 4, icon: '🗡️', desc: '기본 제공되는 나무 검 (ATK +4)' },
+                'wp_iron':  { id: 'wp_iron',  name: '강철 롱소드', type: 'weapon', price: 120, atk: 12, icon: '⚔️', desc: '단단하게 벼려낸 강철검 (ATK +12)' },
+                'wp_mithril':{ id: 'wp_mithril',name: '미스릴 블레이드', type: 'weapon', price: 380, atk: 26, icon: '🔪', desc: '가볍고 예리한 마법 금속 검 (ATK +26)' },
+                'wp_flame': { id: 'wp_flame', name: '홍련의 마검', type: 'weapon', price: 950, atk: 48, icon: '🔥', desc: '불꽃이 일렁이는 상급 도검 (ATK +48)' },
+                'wp_craze': { id: 'wp_craze', name: '성검 크레이즈', type: 'weapon', price: 2400, atk: 85, icon: '⚡', desc: '전설 속 영웅의 빛나는 성검 (ATK +85)' },
+
+                // 방어구 (Armor)
+                'ar_cloth': { id: 'ar_cloth', name: '여행자의 천옷', type: 'armor', price: 0, def: 2, maxHp: 0, icon: '👕', desc: '가벼운 여행용 복장 (DEF +2)' },
+                'ar_leather':{ id: 'ar_leather',name: '하드 레더아머', type: 'armor', price: 100, def: 7, maxHp: 30, icon: '🦺', desc: '질긴 가죽 갑옷 (DEF +7, HP +30)' },
+                'ar_chain': { id: 'ar_chain', name: '강철 사슬갑옷', type: 'armor', price: 340, def: 16, maxHp: 80, icon: '🛡️', desc: '사슬을 엮어 만든 갑옷 (DEF +16, HP +80)' },
+                'ar_plate': { id: 'ar_plate', name: '왕국 기사단 갑주', type: 'armor', price: 880, def: 30, maxHp: 180, icon: '🥋', desc: '중장갑 풀플레이트 (DEF +30, HP +180)' },
+                'ar_dragon':{ id: 'ar_dragon',name: '드래곤 스케일 아머', type: 'armor', price: 2100, def: 52, maxHp: 350, icon: '🐉', desc: '고룡의 비늘 갑주 (DEF +52, HP +350)' },
+
+                // 장신구 (Accessory)
+                'ac_ring':  { id: 'ac_ring',  name: '활력의 반지', type: 'acc', price: 200, atk: 5, def: 5, maxMp: 30, icon: '💍', desc: '공방 +5, 최대 MP +30' },
+                'ac_amulet':{ id: 'ac_amulet',name: '크레이즈 문장', type: 'acc', price: 1000, atk: 18, def: 15, maxMp: 80, icon: '🎖️', desc: '공격+18, 방어+15, 최대 MP +80' }
+            },
+
+            // 4. 스테이지 및 몬스터 설정 (총 5개 테마 던전 - 약 30분 플레이 볼륨)
+            STAGES: [
+                {
+                    id: 1,
+                    name: '제1장: 속삭이는 고블린 숲',
+                    recLv: 'Lv.1 ~ 3',
+                    bgTheme: '#064e3b',
+                    desc: '마을 외곽의 울창한 숲입니다. 약탈자 고블린 무리가 진을 치고 있습니다.',
+                    monsters: [
+                        { name: '초원 슬라임', lv: 1, hp: 38, atk: 9, def: 2, exp: 14, gold: 18, icon: '💧' },
+                        { name: '가시 덩굴꽃', lv: 2, hp: 52, atk: 13, def: 4, exp: 20, gold: 26, icon: '🥀' },
+                        { name: '고블린 정찰병', lv: 3, hp: 70, atk: 16, def: 6, exp: 28, gold: 38, icon: '👺' }
+                    ],
+                    boss: { name: '★ 고블린 대족장 그록', lv: 4, hp: 160, atk: 24, def: 9, exp: 90, gold: 150, icon: '👹', isBoss: true }
+                },
+                {
+                    id: 2,
+                    name: '제2장: 잊혀진 지하 카타콤',
+                    recLv: 'Lv.4 ~ 6',
+                    bgTheme: '#1e1b4b',
+                    desc: '고대 왕국의 지하 묘지입니다. 언데드 몬스터들이 배회하고 있습니다.',
+                    monsters: [
+                        { name: '해골 보병', lv: 4, hp: 110, atk: 24, def: 10, exp: 45, gold: 55, icon: '💀' },
+                        { name: '구울 도굴꾼', lv: 5, hp: 145, atk: 30, def: 13, exp: 60, gold: 75, icon: '🧟' },
+                        { name: '망령 마법사', lv: 6, hp: 130, atk: 36, def: 11, exp: 75, gold: 90, icon: '👻' }
+                    ],
+                    boss: { name: '★ 저주받은 리치 로드', lv: 7, hp: 360, atk: 48, def: 18, exp: 200, gold: 350, icon: '☠️', isBoss: true }
+                },
+                {
+                    id: 3,
+                    name: '제3장: 작열하는 화산 지대',
+                    recLv: 'Lv.7 ~ 9',
+                    bgTheme: '#450a0a',
+                    desc: '뜨거운 용암이 흐르는 화산 지대입니다. 높은 공격력을 가진 화염 정령들이 서식합니다.',
+                    monsters: [
+                        { name: '라바 하운드', lv: 7, hp: 210, atk: 46, def: 20, exp: 110, gold: 130, icon: '🐕‍🦺' },
+                        { name: '화염 골렘', lv: 8, hp: 290, atk: 54, def: 28, exp: 140, gold: 165, icon: '🗿' },
+                        { name: '샐러맨더 전사', lv: 9, hp: 260, atk: 62, def: 24, exp: 165, gold: 195, icon: '🦎' }
+                    ],
+                    boss: { name: '★ 업화의 군주 이프리트', lv: 10, hp: 680, atk: 78, def: 32, exp: 420, gold: 700, icon: '🔥', isBoss: true }
+                },
+                {
+                    id: 4,
+                    name: '제4장: 혹한의 수정 빙하',
+                    recLv: 'Lv.10 ~ 12',
+                    bgTheme: '#082f49',
+                    desc: '만년설로 뒤덮인 얼음 협곡입니다. 단단한 방어력을 지닌 빙결 괴수들이 길을 막습니다.',
+                    monsters: [
+                        { name: '설원 예티', lv: 10, hp: 380, atk: 75, def: 35, exp: 230, gold: 260, icon: '🦍' },
+                        { name: '아이스 가고일', lv: 11, hp: 430, atk: 86, def: 40, exp: 280, gold: 320, icon: '🦇' },
+                        { name: '프로스트 나이트', lv: 12, hp: 510, atk: 98, def: 46, exp: 340, gold: 390, icon: '🤺' }
+                    ],
+                    boss: { name: '★ 빙룡 블리자드 드레이크', lv: 13, hp: 1150, atk: 120, def: 52, exp: 800, gold: 1400, icon: '🐲', isBoss: true }
+                },
+                {
+                    id: 5,
+                    name: '종장: 마왕성 아비스 코어',
+                    recLv: 'Lv.13 ~ 15+',
+                    bgTheme: '#2e1065',
+                    desc: '모든 혼돈의 근원지인 마왕성 최심부입니다. 최강의 적들과 마왕이 기다립니다.',
+                    monsters: [
+                        { name: '어비스 데몬', lv: 13, hp: 620, atk: 115, def: 50, exp: 450, gold: 500, icon: '👿' },
+                        { name: '카오스 듀라한', lv: 14, hp: 750, atk: 132, def: 58, exp: 560, gold: 650, icon: '🏇' },
+                        { name: '타락한 발키리', lv: 15, hp: 840, atk: 148, def: 64, exp: 680, gold: 800, icon: '🧛‍♀️' }
+                    ],
+                    boss: { name: '👑 마왕 아자젤 (최종보스)', lv: 16, hp: 2200, atk: 175, def: 75, exp: 2500, gold: 5000, icon: '😈', isBoss: true, isFinal: true }
+                }
+            ],
+
+            // 5. 맵 레이아웃 (12x12 그리드)
+            MAPS: {
+                'town': {
+                    name: '시작의 마을 아르카디아',
+                    grid: [
+                        [2,2,2,2,2,2,2,2,2,2,2,2],
+                        [2,0,0,0,1,1,0,0,0,0,0,2],
+                        [2,0,0,0,1,1,0,0,0,0,0,2],
+                        [2,0,0,0,1,1,0,0,0,0,0,2],
+                        [2,1,1,1,1,1,1,1,1,0,0,2],
+                        [2,1,1,1,1,1,1,1,1,1,1,2],
+                        [2,0,0,0,1,1,0,0,0,0,0,2],
+                        [2,0,0,0,1,1,0,0,6,0,0,2],
+                        [2,0,3,3,1,1,0,6,0,6,0,2],
+                        [2,0,3,3,1,1,0,0,6,0,0,2],
+                        [2,0,0,0,1,1,0,0,0,0,0,2],
+                        [2,2,2,2,2,2,2,2,2,2,2,2]
+                    ],
+                    objects: [
+                        { x: 2, y: 2, icon: '🏨', name: '여관 주인 마리', type: 'inn', dialog: '여관에 오신 걸 환영해요! 30 골드에 체력과 마나를 모두 회복해 드릴게요.' },
+                        { x: 8, y: 2, icon: '🛒', name: '대장장이 & 잡화상', type: 'shop', dialog: '최고급 무기와 포션이 준비되어 있습니다! 무엇을 찾으시나요?' },
+                        { x: 5, y: 4, icon: '👴', name: '마을 촌장 헤르만', type: 'npc', dialog: '용사여, 동쪽 차원문(🌀)을 통해 5개의 던전 보스를 차례대로 토벌해 주게! 마을 남동쪽 수련장(🌿)에서도 기초 훈련을 할 수 있다네.' },
+                        { x: 10, y: 5, icon: '🌀', name: '원정대 차원문', type: 'portal', dialog: '어느 던전 스테이지로 입장하시겠습니까?' }
+                    ]
+                },
+                'dungeon': {
+                    name: '원정대 던전 구역',
+                    // 몬스터를 피해 우회하거나 선택해서 사냥할 수 있도록 개방형 복도 + 갈림길 구조로 개선
+                    grid: [
+                        [5,5,5,5,5,5,5,5,5,5,5,5],
+                        [5,4,4,4,4,4,4,4,4,4,4,5],
+                        [5,4,5,4,4,4,4,4,4,5,4,5],
+                        [5,4,5,4,4,5,5,4,4,5,4,5],
+                        [5,4,4,4,4,4,4,4,4,4,4,5],
+                        [5,4,4,5,4,4,4,4,5,4,4,5],
+                        [5,4,4,5,4,4,4,4,5,4,4,5],
+                        [5,4,4,4,4,4,4,4,4,4,4,5],
+                        [5,4,5,4,4,5,5,4,4,5,4,5],
+                        [5,4,5,4,4,4,4,4,4,5,4,5],
+                        [5,4,4,4,4,4,4,4,4,4,4,5],
+                        [5,5,5,5,5,5,5,5,5,5,5,5]
+                    ],
+                    objects: [
+                        { x: 1, y: 10, icon: '⛺', name: '귀환 마법진', type: 'return', dialog: '마을로 귀환합니다.' },
+                        { x: 10, y: 10, icon: '🎁', name: '고대 보물상자', type: 'chest', dialog: '보물상자를 발견했습니다!' },
+                        { x: 5, y: 1, icon: '👹', name: '스테이지 보스', type: 'boss', dialog: '감히 내 영역에 발을 들이다니! 목숨을 내놓아라!' }
+                    ],
+                    // 던전 내 심볼 인카운터 몬스터 스폰 좌표 (서로 떨어져 있고 우회 가능)
+                    monsterSpawns: [
+                        { x: 3, y: 8 },
+                        { x: 8, y: 7 },
+                        { x: 2, y: 5 },
+                        { x: 6, y: 5 },
+                        { x: 9, y: 3 },
+                        { x: 3, y: 2 }
+                    ]
+                }
+            }
+        };
+
+        /**
+         * ============================================================================
+         * [PART 2] 사운드 신디사이저 (Web Audio API - 외부 파일 불필요)
+         * ============================================================================
+         */
+        const Sound = {
+            ctx: null,
+            enabled: true,
+            init() {
+                if (!this.ctx) {
+                    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+                    this.ctx = new AudioCtx();
+                }
+            },
+            play(type) {
+                if (!this.enabled) return;
+                try {
+                    this.init();
+                    if (this.ctx.state === 'suspended') this.ctx.resume();
+                    const osc = this.ctx.createOscillator();
+                    const gain = this.ctx.createGain();
+                    osc.connect(gain);
+                    gain.connect(this.ctx.destination);
+
+                    const now = this.ctx.currentTime;
+                    if (type === 'step') {
+                        osc.type = 'triangle';
+                        osc.frequency.setValueAtTime(140, now);
+                        gain.gain.setValueAtTime(0.05, now);
+                        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.06);
+                        osc.start(now); osc.stop(now + 0.06);
+                    } else if (type === 'hit') {
+                        osc.type = 'sawtooth';
+                        osc.frequency.setValueAtTime(180, now);
+                        osc.frequency.exponentialRampToValueAtTime(55, now + 0.15);
+                        gain.gain.setValueAtTime(0.15, now);
+                        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.15);
+                        osc.start(now); osc.stop(now + 0.15);
+                    } else if (type === 'skill') {
+                        osc.type = 'sine';
+                        osc.frequency.setValueAtTime(320, now);
+                        osc.frequency.exponentialRampToValueAtTime(780, now + 0.25);
+                        gain.gain.setValueAtTime(0.15, now);
+                        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.25);
+                        osc.start(now); osc.stop(now + 0.25);
+                    } else if (type === 'levelup') {
+                        osc.type = 'square';
+                        [440, 554, 659, 880].forEach((freq, idx) => {
+                            osc.frequency.setValueAtTime(freq, now + idx * 0.08);
+                        });
+                        gain.gain.setValueAtTime(0.12, now);
+                        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.45);
+                        osc.start(now); osc.stop(now + 0.45);
+                    } else if (type === 'coin') {
+                        osc.type = 'sine';
+                        osc.frequency.setValueAtTime(987, now);
+                        osc.frequency.setValueAtTime(1318, now + 0.07);
+                        gain.gain.setValueAtTime(0.1, now);
+                        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.2);
+                        osc.start(now); osc.stop(now + 0.2);
+                    }
+                } catch (e) {
+                    // 오디오 컨텍스트 제한 무시
+                }
+            }
+        };
+
+        /**
+         * ============================================================================
+         * [PART 3] 플레이어 및 월드 상태 관리 (Game Core)
+         * ============================================================================
+         */
+        const Game = {
+            state: 'EXPLORE', // EXPLORE, BATTLE, MODAL
+            currentMap: 'town',
+            currentStageId: 1,
+            chestOpenedInRun: false,
+            activeMonsters: [], // 현재 던전에 살아있는 심볼 몬스터 목록
+
+            player: {
+                x: 5,
+                y: 6,
+                dir: 'down',
+                lv: 1,
+                exp: 0,
+                maxExp: 35,
+                hp: 100,
+                baseMaxHp: 100,
+                mp: 40,
+                baseMaxMp: 40,
+                baseAtk: 10,
+                baseDef: 3,
+                gold: 150,
+                kills: 0,
+                clearedStage: 0, // 클리어한 최고 스테이지 번호
+                equipment: {
+                    weapon: 'wp_wood',
+                    armor: 'ar_cloth',
+                    acc: null
+                },
+                inventory: {
+                    'potion_s': 3,
+                    'ether_s': 1
+                }
+            },
+
+            init() {
+                this.loadGame(true);
+                this.setupControls();
+                UI.updateAll();
+                Renderer.draw();
+            },
+
+            // 장비 포함 최종 능력치 계산
+            getStats() {
+                const p = this.player;
+                const wp = GAME_DATA.ITEMS[p.equipment.weapon];
+                const ar = GAME_DATA.ITEMS[p.equipment.armor];
+                const ac = p.equipment.acc ? GAME_DATA.ITEMS[p.equipment.acc] : null;
+
+                const atk = p.baseAtk + (wp ? wp.atk : 0) + (ac && ac.atk ? ac.atk : 0);
+                const def = p.baseDef + (ar ? ar.def : 0) + (ac && ac.def ? ac.def : 0);
+                const maxHp = p.baseMaxHp + (ar && ar.maxHp ? ar.maxHp : 0);
+                const maxMp = p.baseMaxMp + (ac && ac.maxMp ? ac.maxMp : 0);
+
+                return { atk, def, maxHp, maxMp };
+            },
+
+            // 타일 이동 처리
+            movePlayer(dx, dy) {
+                if (this.state !== 'EXPLORE') return;
+
+                const mapObj = GAME_DATA.MAPS[this.currentMap];
+                const nx = this.player.x + dx;
+                const ny = this.player.y + dy;
+
+                if (ny < 0 || ny >= 12 || nx < 0 || nx >= 12) return;
+
+                // 1. 던전 심볼 몬스터 충돌 체크 (처치 시 맵에서 사라짐)
+                if (this.currentMap === 'dungeon') {
+                    const hitMob = this.activeMonsters.find(m => m.x === nx && m.y === ny);
+                    if (hitMob) {
+                        Battle.startBattle(hitMob.template, this.currentStageId, hitMob.uid);
+                        Renderer.draw();
+                        return;
+                    }
+                }
+
+                // 2. 일반 오브젝트 충돌 체크
+                const hitObj = mapObj.objects.find(o => o.x === nx && o.y === ny);
+                if (hitObj) {
+                    this.handleObjectInteraction(hitObj);
+                    Renderer.draw();
+                    return;
+                }
+
+                // 지형 통과 가능 여부 확인
+                const tileCode = mapObj.grid[ny][nx];
+                const tileInfo = GAME_DATA.TILES[tileCode];
+                if (!tileInfo.walkable) {
+                    UI.setDialog('시스템', `[${tileInfo.name}] 지형은 가로막혀 이동할 수 없습니다.`);
+                    return;
+                }
+
+                // 이동 적용
+                this.player.x = nx;
+                this.player.y = ny;
+                Sound.play('step');
+                Renderer.draw();
+
+                // 마을 수련장(꽃밭) 타일 인카운터 판정
+                if (tileInfo.encounter) {
+                    const stageId = this.currentMap === 'town' ? 1 : this.currentStageId;
+                    Battle.startRandomBattle(stageId);
+                }
+            },
+
+            // 주변 1칸 또는 현재 위치 오브젝트 조사
+            interact() {
+                if (this.state !== 'EXPLORE') return;
+                if (this.currentMap === 'dungeon') {
+                    const adjMob = this.activeMonsters.find(m => Math.abs(m.x - this.player.x) + Math.abs(m.y - this.player.y) <= 1);
+                    if (adjMob) {
+                        Battle.startBattle(adjMob.template, this.currentStageId, adjMob.uid);
+                        return;
+                    }
+                }
+                const mapObj = GAME_DATA.MAPS[this.currentMap];
+                const adj = mapObj.objects.find(o => Math.abs(o.x - this.player.x) + Math.abs(o.y - this.player.y) <= 1);
+                if (adj) {
+                    this.handleObjectInteraction(adj);
+                } else {
+                    UI.setDialog('용사 크레이즈', '주변에 조사할 만한 특별한 대상이 없다. NPC나 포털 가까이에서 눌러보자.');
+                }
+            },
+
+            handleObjectInteraction(obj) {
+                UI.setDialog(obj.name, obj.dialog);
+
+                if (obj.type === 'inn') {
+                    UI.openInnModal();
+                } else if (obj.type === 'shop') {
+                    UI.openShopModal();
+                } else if (obj.type === 'portal') {
+                    UI.openStageSelectModal();
+                } else if (obj.type === 'return') {
+                    this.enterTown();
+                } else if (obj.type === 'chest') {
+                    if (this.chestOpenedInRun) {
+                        UI.setDialog('보물상자', '이미 비어 있는 상자다.');
+                    } else {
+                        this.chestOpenedInRun = true;
+                        const bonusGold = this.currentStageId * 90 + Math.floor(Math.random() * 60);
+                        this.player.gold += bonusGold;
+                        this.addItem('potion_m', 1);
+                        Sound.play('coin');
+                        UI.setDialog('🎁 보물상자 획득!', `상자 안에서 ${bonusGold} G와 [중급 농축물약] 1개를 발견했습니다!`);
+                        UI.updateAll();
+                    }
+                } else if (obj.type === 'boss') {
+                    const stage = GAME_DATA.STAGES.find(s => s.id === this.currentStageId);
+                    Battle.startBattle(stage.boss, this.currentStageId);
+                }
+            },
+
+            enterDungeon(stageId) {
+                this.currentStageId = stageId;
+                this.currentMap = 'dungeon';
+                this.player.x = 2;
+                this.player.y = 10;
+                this.chestOpenedInRun = false;
+
+                // 보스 아이콘을 스테이지 보스에 맞게 변경
+                const stage = GAME_DATA.STAGES.find(s => s.id === stageId);
+                const bossObj = GAME_DATA.MAPS.dungeon.objects.find(o => o.type === 'boss');
+                if (bossObj && stage) {
+                    bossObj.icon = stage.boss.icon;
+                    bossObj.name = stage.boss.name;
+                }
+
+                // 심볼 몬스터들을 널찍하게 스폰 (잡으면 사라지며, 피해갈 수 있는 위치)
+                const spawns = GAME_DATA.MAPS.dungeon.monsterSpawns || [];
+                this.activeMonsters = spawns.map((pos, idx) => {
+                    const picked = stage.monsters[idx % stage.monsters.length];
+                    return {
+                        uid: `mob_${stageId}_${idx}_${Date.now()}`,
+                        x: pos.x,
+                        y: pos.y,
+                        template: picked
+                    };
+                });
+
+                UI.closeModal();
+                UI.setDialog('원정대 알림', `[${stage.name}]에 진입했습니다! 적들을 처치하면 맵에서 사라지며, 길을 따라 우회하면 적을 피해서 보스에게 바로 도전할 수도 있습니다.`);
+                UI.updateAll();
+                Renderer.draw();
+            },
+
+            enterTown() {
+                this.currentMap = 'town';
+                this.player.x = 9;
+                this.player.y = 5;
+                this.activeMonsters = [];
+                UI.setDialog('시스템', '시작의 마을 아르카디아로 무사히 귀환했습니다.');
+                UI.updateAll();
+                Renderer.draw();
+            },
+
+            // 아이템 획득
+            addItem(itemId, count = 1) {
+                if (!this.player.inventory[itemId]) this.player.inventory[itemId] = 0;
+                this.player.inventory[itemId] += count;
+                UI.updateAll();
+            },
+
+            // 아이템 사용 또는 장착
+            useOrEquipItem(itemId) {
+                const item = GAME_DATA.ITEMS[itemId];
+                if (!item || !this.player.inventory[itemId]) return;
+
+                const stats = this.getStats();
+
+                if (item.type === 'consumable') {
+                    if (item.healHp) {
+                        this.player.hp = Math.min(stats.maxHp, this.player.hp + item.healHp);
+                    }
+                    if (item.healMp) {
+                        this.player.mp = Math.min(stats.maxMp, this.player.mp + item.healMp);
+                    }
+                    this.player.inventory[itemId]--;
+                    if (this.player.inventory[itemId] <= 0) delete this.player.inventory[itemId];
+                    Sound.play('skill');
+                    UI.setDialog('아이템 사용', `[${item.name}]을(를) 사용하여 기력을 회복했습니다.`);
+                } else {
+                    // 장비 장착 교체
+                    const slot = item.type; // weapon, armor, acc
+                    const prevItem = this.player.equipment[slot];
+                    if (prevItem) {
+                        this.addItem(prevItem, 1);
+                    }
+                    this.player.equipment[slot] = itemId;
+                    this.player.inventory[itemId]--;
+                    if (this.player.inventory[itemId] <= 0) delete this.player.inventory[itemId];
+                    Sound.play('coin');
+                    UI.setDialog('장비 장착', `[${item.name}]을(를) 장착했습니다!`);
+                }
+                UI.updateAll();
+            },
+
+            // 경험치 및 레벨업 처리
+            gainExp(amount) {
+                this.player.exp += amount;
+                let leveledUp = false;
+
+                while (this.player.exp >= this.player.maxExp) {
+                    this.player.exp -= this.player.maxExp;
+                    this.player.lv++;
+                    this.player.maxExp = Math.floor(this.player.maxExp * 1.45);
+                    this.player.baseMaxHp += 28;
+                    this.player.baseMaxMp += 12;
+                    this.player.baseAtk += 5;
+                    this.player.baseDef += 3;
+
+                    const stats = this.getStats();
+                    this.player.hp = stats.maxHp;
+                    this.player.mp = stats.maxMp;
+                    leveledUp = true;
+                }
+
+                if (leveledUp) {
+                    Sound.play('levelup');
+                    Battle.log(`🎉 LEVEL UP! 용사 레벨이 Lv.${this.player.lv}(으)로 상승했습니다! (HP/MP 완전 회복)`, 'text-amber-300 font-bold');
+                }
+                UI.updateAll();
+            },
+
+            // 세이브 / 로드
+            saveGame() {
+                try {
+                    localStorage.setItem('CRAZE_RPG_SAVE_V1', JSON.stringify(this.player));
+                    Sound.play('coin');
+                    UI.setDialog('시스템', '💾 현재 진행 상황이 브라우저에 안전하게 저장되었습니다!');
+                } catch (e) {
+                    UI.setDialog('시스템', '저장에 실패했습니다.');
+                }
+            },
+
+            loadGame(silent = false) {
+                try {
+                    const saved = localStorage.getItem('CRAZE_RPG_SAVE_V1');
+                    if (saved) {
+                        const parsed = JSON.parse(saved);
+                        this.player = { ...this.player, ...parsed };
+                        if (!silent) UI.setDialog('시스템', '📂 저장된 데이터를 불러왔습니다.');
+                    }
+                } catch (e) {}
+            },
+
+            toggleSound() {
+                Sound.enabled = !Sound.enabled;
+                document.getElementById('sound-btn').innerText = Sound.enabled ? '🔊 켜짐' : '🔇 꺼짐';
+            },
+
+            // 우측 하단 '행동' 버튼 클릭 시: 탐험 중엔 조사, 전투 중엔 즉시 공격
+            handleActionButton() {
+                if (this.state === 'BATTLE') {
+                    Battle.playerAction('attack');
+                } else {
+                    this.interact();
+                }
+            },
+
+            setupControls() {
+                window.addEventListener('keydown', (e) => {
+                    if (this.state === 'BATTLE') {
+                        if (['Digit1', 'Space', 'Enter'].includes(e.code)) { e.preventDefault(); Battle.playerAction('attack'); }
+                        else if (e.code === 'Digit2') { e.preventDefault(); Battle.toggleSubMenu('skill'); }
+                        else if (e.code === 'Digit3') { e.preventDefault(); Battle.toggleSubMenu('item'); }
+                        else if (e.code === 'Digit4') { e.preventDefault(); Battle.playerAction('run'); }
+                        else if (e.code === 'KeyA') { e.preventDefault(); Battle.toggleAuto(); }
+                        else if (e.code === 'Escape') { e.preventDefault(); Battle.toggleSubMenu(null); }
+                        return;
+                    }
+
+                    if (['ArrowUp', 'KeyW'].includes(e.code)) { e.preventDefault(); this.movePlayer(0, -1); }
+                    else if (['ArrowDown', 'KeyS'].includes(e.code)) { e.preventDefault(); this.movePlayer(0, 1); }
+                    else if (['ArrowLeft', 'KeyA'].includes(e.code)) { e.preventDefault(); this.movePlayer(-1, 0); }
+                    else if (['ArrowRight', 'KeyD'].includes(e.code)) { e.preventDefault(); this.movePlayer(1, 0); }
+                    else if (['Space', 'Enter'].includes(e.code)) { e.preventDefault(); this.interact(); }
+                    else if (e.code === 'Escape' && this.state === 'MODAL') { UI.closeModal(); }
+                });
+            }
+        };
+
+        /**
+         * ============================================================================
+         * [PART 4] 2D 타일맵 렌더러 (Canvas)
+         * ============================================================================
+         */
+        const Renderer = {
+            canvas: document.getElementById('map-canvas'),
+            ctx: document.getElementById('map-canvas').getContext('2d'),
+            tileSize: 40, // 12 * 40 = 480px
+
+            draw() {
+                const ctx = this.ctx;
+                const ts = this.tileSize;
+                const mapObj = GAME_DATA.MAPS[Game.currentMap];
+                const stage = GAME_DATA.STAGES.find(s => s.id === Game.currentStageId);
+
+                ctx.clearRect(0, 0, 480, 480);
+
+                // 1. 타일 그리드 렌더링
+                for (let y = 0; y < 12; y++) {
+                    for (let x = 0; x < 12; x++) {
+                        const code = mapObj.grid[y][x];
+                        const tile = GAME_DATA.TILES[code];
+
+                        // 던전일 경우 스테이지 테마 색상 반영
+                        if (Game.currentMap === 'dungeon' && code === 4 && stage) {
+                            ctx.fillStyle = stage.bgTheme;
+                        } else {
+                            ctx.fillStyle = tile.color;
+                        }
+                        ctx.fillRect(x * ts, y * ts, ts, ts);
+
+                        // 타일 격자선
+                        ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+                        ctx.strokeRect(x * ts, y * ts, ts, ts);
+
+                        // 지형 아이콘
+                        if (tile.icon) {
+                            ctx.font = '20px sans-serif';
+                            ctx.textAlign = 'center';
+                            ctx.textBaseline = 'middle';
+                            ctx.fillText(tile.icon, x * ts + ts / 2, y * ts + ts / 2);
+                        }
+                    }
+                }
+
+                // 2. 상호작용 오브젝트(NPC, 상자, 보스, 포털) 렌더링
+                mapObj.objects.forEach(obj => {
+                    if (obj.type === 'chest' && Game.chestOpenedInRun) return;
+
+                    // 발판 하이라이트
+                    ctx.fillStyle = obj.type === 'boss' ? 'rgba(239, 68, 68, 0.32)' : 'rgba(251, 191, 36, 0.22)';
+                    ctx.beginPath();
+                    ctx.arc(obj.x * ts + ts / 2, obj.y * ts + ts / 2, ts * 0.42, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    ctx.font = '24px sans-serif';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(obj.icon, obj.x * ts + ts / 2, obj.y * ts + ts / 2);
+                });
+
+                // 2-2. 던전 내 살아있는 심볼 몬스터 렌더링
+                if (Game.currentMap === 'dungeon' && Game.activeMonsters.length > 0) {
+                    Game.activeMonsters.forEach(mob => {
+                        ctx.fillStyle = 'rgba(244, 63, 94, 0.22)';
+                        ctx.beginPath();
+                        ctx.arc(mob.x * ts + ts / 2, mob.y * ts + ts / 2, ts * 0.38, 0, Math.PI * 2);
+                        ctx.fill();
+
+                        ctx.font = '22px sans-serif';
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'middle';
+                        ctx.fillText(mob.template.icon, mob.x * ts + ts / 2, mob.y * ts + ts / 2);
+                    });
+                }
+
+                // 3. 플레이어 캐릭터 렌더링
+                const px = Game.player.x * ts + ts / 2;
+                const py = Game.player.y * ts + ts / 2;
+
+                ctx.fillStyle = 'rgba(56, 189, 248, 0.35)';
+                ctx.beginPath();
+                ctx.arc(px, py, ts * 0.44, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.font = '26px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText('🧙‍♂️', px, py);
+            }
+        };
+
+        /**
+         * ============================================================================
+         * [PART 5] 턴제 전투 시스템 (Battle Engine)
+         * ============================================================================
+         */
+        const Battle = {
+            enemy: null,
+            stageId: 1,
+            busy: false,
+            autoMode: false,
+            currentMobUid: null,
+
+            startRandomBattle(stageId) {
+                const stage = GAME_DATA.STAGES.find(s => s.id === stageId);
+                const pool = stage.monsters;
+                const picked = pool[Math.floor(Math.random() * pool.length)];
+                this.startBattle(picked, stageId, null);
+            },
+
+            startBattle(enemyTemplate, stageId, mobUid = null) {
+                Game.state = 'BATTLE';
+                this.stageId = stageId;
+                this.currentMobUid = mobUid;
+                this.busy = false;
+                this.autoMode = false;
+                this.updateAutoBtn();
+                this.enemy = {
+                    ...enemyTemplate,
+                    maxHp: enemyTemplate.hp
+                };
+
+                document.getElementById('battle-screen').classList.remove('hidden');
+                document.getElementById('battle-log').innerHTML = '';
+                this.toggleSubMenu(null);
+
+                this.log(`⚠️ 야생의 [${this.enemy.name}] (Lv.${this.enemy.lv}) 출현! 아래 버튼이나 Space 키로 공격하세요!`, 'text-amber-300 font-bold');
+                UI.setDialog('⚔️ 전투 돌입!', `[${this.enemy.name}]와(과) 전투가 시작되었습니다! 화면의 [⚔️ 공격] 버튼이나 [Space/행동] 버튼을 누르세요.`);
+                this.updateBattleUI();
+            },
+
+            toggleAuto() {
+                if (Game.state !== 'BATTLE') return;
+                this.autoMode = !this.autoMode;
+                this.updateAutoBtn();
+                if (this.autoMode && !this.busy) {
+                    this.runAutoTurn();
+                }
+            },
+
+            updateAutoBtn() {
+                const btn = document.getElementById('battle-auto-btn');
+                if (!btn) return;
+                if (this.autoMode) {
+                    btn.innerText = '⚡ 오토 켜짐';
+                    btn.classList.add('border-amber-400', 'text-amber-300');
+                } else {
+                    btn.innerText = '⚡ 오토 (A)';
+                    btn.classList.remove('border-amber-400', 'text-amber-300');
+                }
+            },
+
+            runAutoTurn() {
+                if (!this.autoMode || Game.state !== 'BATTLE' || this.busy) return;
+                const stats = Game.getStats();
+                // 체력이 35% 이하이고 힐 스킬이 가능하면 자동 힐, 아니면 최상위 공격 스킬이나 일반 공격
+                const healSkill = GAME_DATA.SKILLS.find(s => s.id === 'heal');
+                if (Game.player.hp <= stats.maxHp * 0.35 && Game.player.lv >= healSkill.reqLv && Game.player.mp >= healSkill.mp) {
+                    this.useSkill(healSkill);
+                    return;
+                }
+                const atkSkills = GAME_DATA.SKILLS.filter(s => s.type !== 'heal' && Game.player.lv >= s.reqLv && Game.player.mp >= s.mp);
+                if (atkSkills.length > 0 && Math.random() < 0.6) {
+                    this.useSkill(atkSkills[atkSkills.length - 1]);
+                } else {
+                    this.playerAction('attack');
+                }
+            },
+
+            updateBattleUI() {
+                const e = this.enemy;
+                const p = Game.player;
+                const stats = Game.getStats();
+
+                document.getElementById('battle-stage-tag').innerText = e.isBoss ? 'BOSS BATTLE' : `STAGE ${this.stageId}`;
+                document.getElementById('battle-enemy-name').innerText = e.name;
+                document.getElementById('battle-enemy-lv').innerText = e.lv;
+                document.getElementById('battle-enemy-stats').innerText = `ATK ${e.atk} / DEF ${e.def}`;
+                document.getElementById('enemy-sprite-box').innerText = e.icon;
+
+                const eHpPct = Math.max(0, Math.min(100, (e.hp / e.maxHp) * 100));
+                document.getElementById('battle-enemy-hp-text').innerText = `${Math.max(0, e.hp)} / ${e.maxHp}`;
+                document.getElementById('battle-enemy-hp-bar').style.width = `${eHpPct}%`;
+
+                const pHpPct = Math.max(0, Math.min(100, (p.hp / stats.maxHp) * 100));
+                const pMpPct = Math.max(0, Math.min(100, (p.mp / stats.maxMp) * 100));
+                document.getElementById('battle-player-hp').innerText = `${p.hp}/${stats.maxHp}`;
+                document.getElementById('battle-player-hp-bar').style.width = `${pHpPct}%`;
+                document.getElementById('battle-player-mp').innerText = `${p.mp}/${stats.maxMp}`;
+                document.getElementById('battle-player-mp-bar').style.width = `${pMpPct}%`;
+
+                UI.updateAll();
+            },
+
+            log(msg, colorClass = 'text-slate-200') {
+                const box = document.getElementById('battle-log');
+                const div = document.createElement('div');
+                div.className = colorClass;
+                div.innerText = `▸ ${msg}`;
+                box.appendChild(div);
+                box.scrollTop = box.scrollHeight;
+            },
+
+            showPopup(text, color = '#f87171') {
+                const layer = document.getElementById('damage-layer');
+                const el = document.createElement('div');
+                el.className = 'dmg-popup text-2xl sm:text-3xl font-black drop-shadow';
+                el.style.color = color;
+                el.innerText = text;
+                layer.appendChild(el);
+                setTimeout(() => el.remove(), 850);
+            },
+
+            toggleSubMenu(type) {
+                const sub = document.getElementById('battle-cmd-sub');
+                const list = document.getElementById('battle-sub-list');
+                const title = document.getElementById('battle-sub-title');
+
+                if (!type) {
+                    sub.classList.add('hidden');
+                    return;
+                }
+
+                sub.classList.remove('hidden');
+                list.innerHTML = '';
+
+                if (type === 'skill') {
+                    title.innerText = '✨ 사용할 스킬 선택';
+                    GAME_DATA.SKILLS.forEach(sk => {
+                        const unlocked = Game.player.lv >= sk.reqLv;
+                        const enoughMp = Game.player.mp >= sk.mp;
+                        const btn = document.createElement('button');
+                        btn.className = 'rpg-btn p-1.5 text-left text-xs flex justify-between items-center';
+                        btn.disabled = !unlocked || !enoughMp;
+                        btn.innerHTML = `
+                            <span>${unlocked ? sk.name : `🔒 Lv.${sk.reqLv} 해금`}</span>
+                            <span class="text-sky-300 font-bold">MP ${sk.mp}</span>
+                        `;
+                        btn.onclick = () => this.useSkill(sk);
+                        list.appendChild(btn);
+                    });
+                } else if (type === 'item') {
+                    title.innerText = '🧪 사용할 소비 아이템 선택';
+                    const keys = Object.keys(Game.player.inventory).filter(k => GAME_DATA.ITEMS[k]?.type === 'consumable');
+                    if (keys.length === 0) {
+                        list.innerHTML = `<div class="col-span-2 text-slate-400 text-xs py-2">사용 가능한 포션이 없습니다.</div>`;
+                        return;
+                    }
+                    keys.forEach(k => {
+                        const item = GAME_DATA.ITEMS[k];
+                        const cnt = Game.player.inventory[k];
+                        const btn = document.createElement('button');
+                        btn.className = 'rpg-btn p-1.5 text-left text-xs flex justify-between items-center';
+                        btn.innerHTML = `<span>${item.icon} ${item.name}</span><span class="text-emerald-300">x${cnt}</span>`;
+                        btn.onclick = () => {
+                            this.toggleSubMenu(null);
+                            Game.useOrEquipItem(k);
+                            this.log(`[${item.name}]을(를) 사용했습니다!`, 'text-emerald-300');
+                            this.updateBattleUI();
+                            this.triggerEnemyTurn();
+                        };
+                        list.appendChild(btn);
+                    });
+                }
+            },
+
+            playerAction(action) {
+                if (this.busy) return;
+                this.toggleSubMenu(null);
+
+                const stats = Game.getStats();
+
+                if (action === 'attack') {
+                    this.busy = true;
+                    const isCrit = Math.random() < 0.18;
+                    const rawDmg = Math.max(2, stats.atk - Math.floor(this.enemy.def * 0.55));
+                    const dmg = Math.floor(rawDmg * (isCrit ? 1.65 : 1) * (0.9 + Math.random() * 0.2));
+
+                    this.enemy.hp -= dmg;
+                    Sound.play('hit');
+                    this.animateEnemyHit();
+                    this.showPopup(isCrit ? `CRIT -${dmg}!` : `-${dmg}`, isCrit ? '#fbbf24' : '#f87171');
+                    this.log(`용사의 공격! ${isCrit ? '⚡치명타! ' : ''}[${this.enemy.name}]에게 ${dmg}의 피해!`, isCrit ? 'text-amber-300 font-bold' : 'text-white');
+
+                    this.updateBattleUI();
+                    this.checkBattleEndOrNextTurn();
+                } else if (action === 'run') {
+                    if (this.enemy.isBoss) {
+                        this.log('보스전에서는 도망칠 수 없습니다!', 'text-red-400');
+                        return;
+                    }
+                    this.busy = true;
+                    if (Math.random() < 0.75) {
+                        this.log('전투에서 무사히 도망쳤습니다.', 'text-slate-300');
+                        setTimeout(() => this.endBattle(), 500);
+                    } else {
+                        this.log('도주에 실패했습니다!', 'text-red-400');
+                        this.triggerEnemyTurn();
+                    }
+                }
+            },
+
+            useSkill(sk) {
+                if (this.busy) return;
+                this.toggleSubMenu(null);
+                this.busy = true;
+
+                const stats = Game.getStats();
+                Game.player.mp -= sk.mp;
+                Sound.play('skill');
+
+                if (sk.type === 'heal') {
+                    const healAmt = sk.power + Math.floor(stats.atk * 0.6);
+                    Game.player.hp = Math.min(stats.maxHp, Game.player.hp + healAmt);
+                    this.showPopup(`+${healAmt} HP`, '#34d399');
+                    this.log(`✨ [${sk.name}] 발동! 체력을 ${healAmt} 회복했습니다.`, 'text-emerald-300 font-bold');
+                } else if (sk.type === 'dmg' || sk.type === 'drain') {
+                    const defFactor = sk.ignoreDef ? 0.15 : 0.5;
+                    const base = Math.max(4, stats.atk * sk.mult - this.enemy.def * defFactor);
+                    const dmg = Math.floor(base * (0.95 + Math.random() * 0.15));
+                    this.enemy.hp -= dmg;
+                    this.animateEnemyHit();
+                    this.showPopup(`✨ -${dmg}`, '#38bdf8');
+                    this.log(`✨ [${sk.name}] 적중! [${this.enemy.name}]에게 ${dmg}의 강력한 피해!`, 'text-sky-300 font-bold');
+
+                    if (sk.type === 'drain') {
+                        const drained = Math.floor(dmg * 0.5);
+                        Game.player.hp = Math.min(stats.maxHp, Game.player.hp + drained);
+                        this.log(`흡혈 효과로 HP를 ${drained} 흡수했습니다!`, 'text-emerald-300');
+                    }
+                }
+
+                this.updateBattleUI();
+                this.checkBattleEndOrNextTurn();
+            },
+
+            animateEnemyHit() {
+                const box = document.getElementById('enemy-sprite-box');
+                box.classList.remove('shake-anim');
+                void box.offsetWidth;
+                box.classList.add('shake-anim');
+            },
+
+            checkBattleEndOrNextTurn() {
+                if (this.enemy.hp <= 0) {
+                    this.handleVictory();
+                } else {
+                    this.triggerEnemyTurn();
+                }
+            },
+
+            triggerEnemyTurn() {
+                setTimeout(() => {
+                    if (Game.state !== 'BATTLE') return;
+                    const stats = Game.getStats();
+                    const e = this.enemy;
+
+                    // 보스 특수 공격 확률
+                    const isHeavy = e.isBoss && Math.random() < 0.3;
+                    const mult = isHeavy ? 1.45 : 1.0;
+                    const raw = Math.max(1, Math.floor(e.atk * mult - stats.def * 0.65));
+                    const dmg = Math.max(1, Math.floor(raw * (0.9 + Math.random() * 0.2)));
+
+                    Game.player.hp = Math.max(0, Game.player.hp - dmg);
+                    Sound.play('hit');
+
+                    if (isHeavy) {
+                        this.log(`💥 [${e.name}]의 맹렬한 필살 일격! 용사에게 ${dmg}의 치명적 피해!`, 'text-red-400 font-bold');
+                    } else {
+                        this.log(`[${e.name}]의 반격! 용사가 ${dmg}의 피해를 입었습니다.`, 'text-rose-300');
+                    }
+
+                    this.updateBattleUI();
+
+                    if (Game.player.hp <= 0) {
+                        this.handleDefeat();
+                    } else {
+                        this.busy = false;
+                        if (this.autoMode) {
+                            setTimeout(() => this.runAutoTurn(), 350);
+                        }
+                    }
+                }, 550);
+            },
+
+            handleVictory() {
+                const e = this.enemy;
+                Game.player.gold += e.gold;
+                Game.player.kills++;
+                Sound.play('coin');
+
+                // 필드 심볼 몬스터를 처치한 경우 맵에서 즉시 제거 및 타일 이동
+                if (this.currentMobUid) {
+                    const targetMob = Game.activeMonsters.find(m => m.uid === this.currentMobUid);
+                    if (targetMob) {
+                        Game.player.x = targetMob.x;
+                        Game.player.y = targetMob.y;
+                    }
+                    Game.activeMonsters = Game.activeMonsters.filter(m => m.uid !== this.currentMobUid);
+                    this.currentMobUid = null;
+                }
+
+                this.log(`🏆 [${e.name}] 처치 성공! (+${e.exp} EXP, +${e.gold} G)`, 'text-yellow-300 font-bold');
+                Game.gainExp(e.exp);
+
+                // 보스 클리어 처리
+                if (e.isBoss) {
+                    if (this.stageId > Game.player.clearedStage) {
+                        Game.player.clearedStage = this.stageId;
+                    }
+                    Game.saveGame();
+                }
+
+                setTimeout(() => {
+                    this.endBattle();
+                    Renderer.draw();
+                    if (e.isFinal) {
+                        UI.openEndingModal();
+                    } else if (e.isBoss) {
+                        Game.enterTown();
+                        UI.setDialog('🎉 챕터 보스 토벌 완료!', `[${e.name}]을(를) 물리치고 마을로 개선했습니다! 이제 다음 스테이지 던전이 해금되었습니다.`);
+                    }
+                }, 1100);
+            },
+
+            handleDefeat() {
+                this.log('용사가 쓰러졌습니다... 마을 여관으로 긴급 후송됩니다.', 'text-red-500 font-bold');
+                setTimeout(() => {
+                    const stats = Game.getStats();
+                    Game.player.hp = Math.floor(stats.maxHp * 0.5);
+                    Game.player.mp = Math.floor(stats.maxMp * 0.5);
+                    Game.player.gold = Math.floor(Game.player.gold * 0.85); // 골드 15% 페널티
+                    this.endBattle();
+                    Game.enterTown();
+                    UI.setDialog('여관 주인 마리', '정신이 드세요? 던전에서 쓰러진 걸 구출해 왔어요. 치료비로 소지금의 일부가 사용되었으니 장비를 더 강화해 보세요!');
+                    UI.updateAll();
+                }, 1300);
+            },
+
+            endBattle() {
+                this.autoMode = false;
+                this.updateAutoBtn();
+                document.getElementById('battle-screen').classList.add('hidden');
+                Game.state = 'EXPLORE';
+                this.busy = false;
+                UI.updateAll();
+            }
+        };
+
+        /**
+         * ============================================================================
+         * [PART 6] UI 컨트롤러 (상점, 여관, 인벤토리, 원정대 모달)
+         * ============================================================================
+         */
+        const UI = {
+            currentTab: 'inv',
+
+            updateAll() {
+                const p = Game.player;
+                const stats = Game.getStats();
+
+                // 상단 맵 이름
+                const mapTitle = Game.currentMap === 'town'
+                    ? GAME_DATA.MAPS.town.name
+                    : GAME_DATA.STAGES.find(s => s.id === Game.currentStageId)?.name;
+                document.getElementById('map-indicator').innerText = `📍 ${mapTitle}`;
+
+                // 우측 스탯바
+                document.getElementById('stat-lv').innerText = `Lv.${p.lv}`;
+                document.getElementById('stat-gold').innerText = p.gold.toLocaleString();
+                document.getElementById('stat-kills').innerText = p.kills;
+
+                const titles = ['초보 모험가', '숙련된 검사', '왕국 수호기사', '드래곤 슬레이어', '전설의 크레이즈 영웅'];
+                document.getElementById('stat-title').innerText = titles[Math.min(titles.length - 1, p.clearedStage)];
+
+                document.getElementById('stat-hp-text').innerText = `${p.hp} / ${stats.maxHp}`;
+                document.getElementById('stat-hp-bar').style.width = `${Math.min(100, (p.hp / stats.maxHp) * 100)}%`;
+
+                document.getElementById('stat-mp-text').innerText = `${p.mp} / ${stats.maxMp}`;
+                document.getElementById('stat-mp-bar').style.width = `${Math.min(100, (p.mp / stats.maxMp) * 100)}%`;
+
+                document.getElementById('stat-exp-text').innerText = `${p.exp} / ${p.maxExp}`;
+                document.getElementById('stat-exp-bar').style.width = `${Math.min(100, (p.exp / p.maxExp) * 100)}%`;
+
+                document.getElementById('stat-atk').innerText = stats.atk;
+                document.getElementById('stat-def').innerText = stats.def;
+
+                // 장착 장비 표시
+                document.getElementById('equip-weapon').innerText = GAME_DATA.ITEMS[p.equipment.weapon]?.name || '없음';
+                document.getElementById('equip-armor').innerText = GAME_DATA.ITEMS[p.equipment.armor]?.name || '없음';
+                document.getElementById('equip-acc').innerText = p.equipment.acc ? GAME_DATA.ITEMS[p.equipment.acc]?.name : '없음';
+
+                // 메인 퀘스트 안내 업데이트
+                document.getElementById('quest-progress-pct').innerText = `${p.clearedStage}/5 보스`;
+                const nextStage = GAME_DATA.STAGES.find(s => s.id === p.clearedStage + 1);
+                document.getElementById('quest-desc').innerText = nextStage
+                    ? `다음 목표: [${nextStage.name}]의 보스 '${nextStage.boss.name}' 토벌 (${nextStage.recLv})`
+                    : `👑 모든 마왕군 보스를 토벌했습니다! 자유롭게 원정을 즐기세요.`;
+
+                this.renderSideTab();
+            },
+
+            setDialog(speaker, text) {
+                document.getElementById('dialog-speaker').innerText = `💬 ${speaker}`;
+                document.getElementById('dialog-text').innerText = text;
+            },
+
+            togglePad() {
+                const pad = document.getElementById('virtual-pad');
+                const btn = document.getElementById('pad-toggle-btn');
+                pad.classList.toggle('hidden');
+                btn.classList.toggle('opacity-50');
+            },
+
+            switchSideTab(tab) {
+                this.currentTab = tab;
+                ['inv', 'skill', 'stage'].forEach(t => {
+                    const btn = document.getElementById(`tab-btn-${t}`);
+                    if (t === tab) {
+                        btn.classList.add('text-amber-300', 'border-amber-400');
+                    } else {
+                        btn.classList.remove('text-amber-300', 'border-amber-400');
+                    }
+                });
+                this.renderSideTab();
+            },
+
+            renderSideTab() {
+                const box = document.getElementById('side-tab-content');
+                box.innerHTML = '';
+
+                if (this.currentTab === 'inv') {
+                    const keys = Object.keys(Game.player.inventory);
+                    if (keys.length === 0) {
+                        box.innerHTML = `<div class="text-slate-500 text-center py-6">가방이 비어 있습니다.</div>`;
+                        return;
+                    }
+                    keys.forEach(k => {
+                        const item = GAME_DATA.ITEMS[k];
+                        const count = Game.player.inventory[k];
+                        if (!item || count <= 0) return;
+
+                        const row = document.createElement('div');
+                        row.className = 'flex items-center justify-between bg-slate-900 p-1.5 rounded border border-slate-800';
+                        row.innerHTML = `
+                            <div>
+                                <div class="font-bold text-slate-100">${item.icon} ${item.name} <span class="text-amber-400">x${count}</span></div>
+                                <div class="text-[10px] text-slate-400">${item.desc}</div>
+                            </div>
+                            <button class="rpg-btn px-2 py-1 text-[11px] font-bold text-emerald-300 shrink-0">
+                                ${item.type === 'consumable' ? '사용' : '장착'}
+                            </button>
+                        `;
+                        row.querySelector('button').onclick = () => Game.useOrEquipItem(k);
+                        box.appendChild(row);
+                    });
+                } else if (this.currentTab === 'skill') {
+                    GAME_DATA.SKILLS.forEach(sk => {
+                        const unlocked = Game.player.lv >= sk.reqLv;
+                        const row = document.createElement('div');
+                        row.className = `p-1.5 rounded border ${unlocked ? 'bg-slate-900 border-slate-700' : 'bg-slate-950/50 border-slate-900 opacity-50'}`;
+                        row.innerHTML = `
+                            <div class="flex justify-between font-bold">
+                                <span class="${unlocked ? 'text-sky-300' : 'text-slate-400'}">${sk.name}</span>
+                                <span class="text-[11px] text-amber-300">요구 Lv.${sk.reqLv} / MP ${sk.mp}</span>
+                            </div>
+                            <div class="text-[11px] text-slate-400 mt-0.5">${sk.desc}</div>
+                        `;
+                        box.appendChild(row);
+                    });
+                } else if (this.currentTab === 'stage') {
+                    GAME_DATA.STAGES.forEach(st => {
+                        const unlocked = st.id <= Game.player.clearedStage + 1;
+                        const cleared = st.id <= Game.player.clearedStage;
+                        const row = document.createElement('div');
+                        row.className = 'flex items-center justify-between bg-slate-900 p-2 rounded border border-slate-800';
+                        row.innerHTML = `
+                            <div>
+                                <div class="font-bold ${unlocked ? 'text-white' : 'text-slate-500'}">
+                                    ${cleared ? '✅ ' : (unlocked ? '⚔️ ' : '🔒 ')}${st.name}
+                                </div>
+                                <div class="text-[10px] text-slate-400">권장: ${st.recLv} | 보스: ${st.boss.name}</div>
+                            </div>
+                            <button ${!unlocked || Game.state === 'BATTLE' ? 'disabled' : ''} class="rpg-btn px-2 py-1 text-[11px] font-bold text-amber-300 shrink-0">
+                                이동
+                            </button>
+                        `;
+                        row.querySelector('button').onclick = () => Game.enterDungeon(st.id);
+                        box.appendChild(row);
+                    });
+                }
+            },
+
+            // 모달 열기/닫기 헬퍼
+            openModal(title, renderFn) {
+                Game.state = 'MODAL';
+                document.getElementById('modal-title').innerText = title;
+                const content = document.getElementById('modal-content');
+                content.innerHTML = '';
+                renderFn(content);
+                document.getElementById('modal-screen').classList.remove('hidden');
+            },
+
+            closeModal() {
+                document.getElementById('modal-screen').classList.add('hidden');
+                if (Game.state === 'MODAL') Game.state = 'EXPLORE';
+            },
+
+            // 여관 모달
+            openInnModal() {
+                this.openModal('🏨 아르카디아 휴식 여관', (container) => {
+                    const cost = 30;
+                    container.innerHTML = `
+                        <div class="p-4 bg-slate-900 rounded border border-slate-700 text-center space-y-3">
+                            <div class="text-5xl">🛌</div>
+                            <div class="text-sm text-slate-200">따뜻한 수프와 편안한 침대에서 휴식하시겠습니까?<br>HP와 MP가 100% 회복되고 자동 저장됩니다.</div>
+                            <div class="text-amber-400 font-bold">숙박 비용: ${cost} G (보유: ${Game.player.gold} G)</div>
+                            <button id="inn-rest-btn" class="rpg-btn px-6 py-2.5 font-bold text-emerald-300">✨ 휴식하기 (${cost} G)</button>
+                        </div>
+                    `;
+                    container.querySelector('#inn-rest-btn').onclick = () => {
+                        if (Game.player.gold < cost) {
+                            this.setDialog('여관 주인 마리', '골드가 부족하네요! 마을 수련장이나 초급 던전에서 몬스터를 잡아보세요.');
+                            return;
+                        }
+                        const stats = Game.getStats();
+                        Game.player.gold -= cost;
+                        Game.player.hp = stats.maxHp;
+                        Game.player.mp = stats.maxMp;
+                        Sound.play('levelup');
+                        Game.saveGame();
+                        this.updateAll();
+                        this.closeModal();
+                        this.setDialog('여관 주인 마리', '푹 주무셨나요? 체력과 마나가 모두 회복되었습니다!');
+                    };
+                });
+            },
+
+            // 상점 모달
+            openShopModal() {
+                this.openModal('🛒 왕국 대장간 & 잡화 상점', (container) => {
+                    const shopList = [
+                        'potion_s', 'potion_m', 'potion_l', 'ether_s', 'ether_l',
+                        'wp_iron', 'wp_mithril', 'wp_flame', 'wp_craze',
+                        'ar_leather', 'ar_chain', 'ar_plate', 'ar_dragon',
+                        'ac_ring', 'ac_amulet'
+                    ];
+
+                    shopList.forEach(id => {
+                        const item = GAME_DATA.ITEMS[id];
+                        const row = document.createElement('div');
+                        row.className = 'flex items-center justify-between bg-slate-900 p-2.5 rounded border border-slate-800';
+                        row.innerHTML = `
+                            <div>
+                                <div class="font-bold text-sm text-white">${item.icon} ${item.name}</div>
+                                <div class="text-xs text-slate-400">${item.desc}</div>
+                            </div>
+                            <button class="rpg-btn px-3 py-1.5 text-xs font-bold text-amber-300 shrink-0">
+                                💰 ${item.price} G 구매
+                            </button>
+                        `;
+                        row.querySelector('button').onclick = () => {
+                            if (Game.player.gold < item.price) {
+                                this.setDialog('상점 주인', '골드가 부족합니다!');
+                                return;
+                            }
+                            Game.player.gold -= item.price;
+                            Game.addItem(id, 1);
+                            Sound.play('coin');
+                            this.setDialog('상점 주인', `[${item.name}] 구매 감사합니다! 우측 가방 탭에서 장착하거나 사용할 수 있습니다.`);
+                            this.updateAll();
+                        };
+                        container.appendChild(row);
+                    });
+                });
+            },
+
+            // 던전 차원문 선택 모달
+            openStageSelectModal() {
+                this.openModal('🌀 원정대 던전 차원문', (container) => {
+                    GAME_DATA.STAGES.forEach(st => {
+                        const unlocked = st.id <= Game.player.clearedStage + 1;
+                        const cleared = st.id <= Game.player.clearedStage;
+                        const card = document.createElement('div');
+                        card.className = `p-3 rounded border flex flex-col sm:flex-row sm:items-center justify-between gap-2 ${unlocked ? 'bg-slate-900 border-slate-700' : 'bg-slate-950 border-slate-900 opacity-50'}`;
+                        card.innerHTML = `
+                            <div>
+                                <div class="font-black text-sm text-amber-300">
+                                    ${cleared ? '✅ [클리어]' : (unlocked ? '🔥 [진행가능]' : '🔒 [잠김]')} ${st.name}
+                                </div>
+                                <div class="text-xs text-slate-300 mt-0.5">${st.desc}</div>
+                                <div class="text-[11px] text-emerald-400 mt-1">권장 레벨: ${st.recLv} | 보스: ${st.boss.name}</div>
+                            </div>
+                            <button ${!unlocked ? 'disabled' : ''} class="rpg-btn px-4 py-2 text-xs font-bold text-white shrink-0">
+                                🚀 출정하기
+                            </button>
+                        `;
+                        card.querySelector('button').onclick = () => Game.enterDungeon(st.id);
+                        container.appendChild(card);
+                    });
+                });
+            },
+
+            // 개발판 테스트용 치트 모달
+            openDevModal() {
+                this.openModal('🛠️ 크레이즈 RPG 개발자 도구 (빠른 테스트 & 수정용)', (container) => {
+                    container.innerHTML = `
+                        <div class="p-3 bg-slate-900 border border-slate-700 rounded space-y-3 text-xs">
+                            <p class="text-slate-300">개발판 테스트를 위해 골드, 레벨, 스테이지 해금을 즉시 조작할 수 있습니다.</p>
+                            <div class="grid grid-cols-2 gap-2">
+                                <button id="dev-gold" class="rpg-btn py-2 font-bold text-amber-300">💰 +1,000 골드 지급</button>
+                                <button id="dev-lv" class="rpg-btn py-2 font-bold text-sky-300">⬆️ 즉시 레벨업 (+1 Lv)</button>
+                                <button id="dev-unlock" class="rpg-btn py-2 font-bold text-emerald-300">🔓 전 스테이지 해금</button>
+                                <button id="dev-reset" class="rpg-btn py-2 font-bold text-rose-400">🗑️ 세이브 초기화</button>
+                            </div>
+                        </div>
+                    `;
+                    container.querySelector('#dev-gold').onclick = () => {
+                        Game.player.gold += 1000;
+                        Sound.play('coin');
+                        this.updateAll();
+                    };
+                    container.querySelector('#dev-lv').onclick = () => {
+                        Game.gainExp(Game.player.maxExp);
+                        this.updateAll();
+                    };
+                    container.querySelector('#dev-unlock').onclick = () => {
+                        Game.player.clearedStage = 5;
+                        this.updateAll();
+                        this.setDialog('개발자 도구', '모든 던전 스테이지가 해금되었습니다.');
+                    };
+                    container.querySelector('#dev-reset').onclick = () => {
+                        localStorage.removeItem('CRAZE_RPG_SAVE_V1');
+                        location.reload();
+                    };
+                });
+            },
+
+            // 최종 엔딩 축하 모달
+            openEndingModal() {
+                this.openModal('👑 크레이즈 RPG 개발판 클리어!', (container) => {
+                    container.innerHTML = `
+                        <div class="p-5 bg-slate-900 border-2 border-amber-400 rounded text-center space-y-3">
+                            <div class="text-6xl">🏆</div>
+                            <h3 class="text-xl font-black text-amber-300">축하합니다! 마왕 아자젤을 토벌했습니다!</h3>
+                            <p class="text-xs sm:text-sm text-slate-200 leading-relaxed">
+                                용사 크레이즈의 활약으로 아르카디아 왕국에 마침내 평화가 찾아왔습니다.<br>
+                                최종 달성 레벨: <b>Lv.${Game.player.lv}</b> | 총 처치 몬스터: <b>${Game.player.kills}마리</b>
+                            </p>
+                            <button onclick="UI.closeModal(); Game.enterTown();" class="rpg-btn px-6 py-2.5 font-bold text-amber-300">
+                                🏰 평화로워진 마을로 돌아가기
+                            </button>
+                        </div>
+                    `;
+                });
+            }
+        };
+
+        // 윈도우 로드 시 게임 시작
+        window.onload = function () {
+            Game.init();
+        };
+    </script>
+</body>
+</html>
